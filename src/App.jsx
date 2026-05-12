@@ -795,7 +795,7 @@ export default function GeoMarketMultiAgent() {
       <div style={{ borderBottom: `3px solid ${C.ink}` }}>
         <div style={{ borderBottom: `1px solid ${C.ink}`, padding: "4px 28px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 2, color: C.ink3 }}>7-AGENT INTELLIGENCE SYSTEM</span>
+            <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 2, color: C.ink3 }}>9-AGENT INTELLIGENCE SYSTEM</span>
             <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 2, color: C.ink3 }}>NSE · BSE · INDIA MARKETS</span>
           </div>
         </div>
@@ -890,7 +890,7 @@ export default function GeoMarketMultiAgent() {
           fontSize: 11, fontWeight: 700, letterSpacing: 4,
           marginBottom: 24, transition: "all 0.2s",
         }}>
-          {running ? "▶  AGENTS RUNNING — PLEASE WAIT..." : "LAUNCH 7-AGENT ANALYSIS"}
+          {running ? "▶  AGENTS RUNNING — PLEASE WAIT..." : "LAUNCH 9-AGENT ANALYSIS"}
         </button>
 
         {/* Agent pipeline */}
@@ -1506,7 +1506,7 @@ export default function GeoMarketMultiAgent() {
           <div style={{ textAlign: "center", padding: "60px 20px" }}>
             <div style={{ fontSize: 32, marginBottom: 12, color: C.rule, fontFamily: "'Playfair Display', serif" }}>◎</div>
             <p style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 3, color: C.ink4, margin: 0 }}>AWAITING EVENT INPUT</p>
-            <p style={{ fontSize: 10, color: C.rule, margin: "8px 0 0", fontFamily: "'IBM Plex Mono', monospace" }}>7 agents ready · India-focused</p>
+            <p style={{ fontSize: 10, color: C.rule, margin: "8px 0 0", fontFamily: "'IBM Plex Mono', monospace" }}>9 agents ready · India-focused</p>
           </div>
         )}
       </div>
