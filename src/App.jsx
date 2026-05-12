@@ -796,7 +796,22 @@ export default function GeoMarketMultiAgent() {
         <div style={{ borderBottom: `1px solid ${C.ink}`, padding: "4px 28px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 2, color: C.ink3 }}>9-AGENT INTELLIGENCE SYSTEM</span>
-            <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 2, color: C.ink3 }}>NSE · BSE · INDIA MARKETS</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <span className="hide-mobile" style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 2, color: C.ink3 }}>NSE · BSE · INDIA MARKETS</span>
+              <button
+                onClick={() => setShowSettings(true)}
+                style={{
+                  background: localStorage.getItem("geomarket_api_key") ? C.bull : C.bear,
+                  border: "none", color: "#fff",
+                  fontSize: 10, fontWeight: 700,
+                  padding: "4px 14px", cursor: "pointer",
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  letterSpacing: 1
+                }}
+              >
+                {localStorage.getItem("geomarket_api_key") ? "⚙ KEY SET" : "⚙ SET API KEY"}
+              </button>
+            </div>
           </div>
         </div>
         <div style={{ padding: "10px 16px 8px", textAlign: "center" }}>
