@@ -31,9 +31,16 @@ async function fetchLiveEvents() {
   const messages = [{ role: "user", content: "Search for today's top 6-8 geopolitical and macroeconomic events that could impact Indian stock markets (NSE/BSE). Include India-specific events, global macro developments, and geopolitical tensions. Return ONLY a JSON array of short event strings, each under 90 characters. Example format: [\"event one\", \"event two\"]. No markdown, no explanation." }];
 
   for (let turn = 0; turn < 6; turn++) {
+    const apiKey = localStorage.getItem("geomarket_api_key") || "";
+    if (!apiKey) throw new Error("No API key");
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true"
+      },
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
         max_tokens: 800,
@@ -448,11 +455,16 @@ function repairJSON(raw) {
 }
 
 async function callAgent(prompt) {
-  const apiKey = localStorage.getItem("anthropic_api_key") || "";
-  if (!apiKey) throw new Error("No API key set. Click ⚙ Settings to add your Anthropic API key.");
+  const apiKey = localStorage.getItem("geomarket_api_key") || "";
+  if (!apiKey) throw new Error("No API key. Click ⚙ Settings to add your Anthropic API key.");
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true"
+    },
     body: JSON.stringify({
       model: "claude-sonnet-4-20250514",
       max_tokens: 4000,
@@ -642,7 +654,6 @@ export default function GeoMarketMultiAgent() {
     }
   }
 
-  // Auto-fetch live events on mount
   useEffect(() => { refreshEvents(); }, []);
 
   const result = agentData.synthesis;
@@ -711,12 +722,11 @@ export default function GeoMarketMultiAgent() {
   ] : [];
 
   const [showSettings, setShowSettings] = useState(false);
-  const [apiKeyInput, setApiKeyInput] = useState(localStorage.getItem("anthropic_api_key") || "");
+  const [apiKeyInput, setApiKeyInput] = useState(localStorage.getItem("geomarket_api_key") || "");
 
   function saveApiKey() {
-    localStorage.setItem("anthropic_api_key", apiKeyInput.trim());
+    localStorage.setItem("geomarket_api_key", apiKeyInput.trim());
     setShowSettings(false);
-    if (apiKeyInput.trim()) refreshEvents();
   }
 
   return (
@@ -757,12 +767,51 @@ export default function GeoMarketMultiAgent() {
         }
       `}</style>
 
+      {/* Settings Modal */}
+      {showSettings && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div style={{ background: C.paper, border: `2px solid ${C.ink}`, padding: 28, width: 400, maxWidth: "100%" }}>
+            <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 18, fontWeight: 700, color: C.ink, marginBottom: 6 }}>Anthropic API Key</div>
+            <p style={{ fontSize: 11, color: C.ink3, fontFamily: "'IBM Plex Mono', monospace", marginBottom: 16, lineHeight: 1.7 }}>
+              Your key is stored only in this browser. Never sent to GitHub or any server. Get yours at console.anthropic.com
+            </p>
+            <input
+              type="password"
+              value={apiKeyInput}
+              onChange={e => setApiKeyInput(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && saveApiKey()}
+              placeholder="sk-ant-api03-..."
+              style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.rule}`, background: C.bg, color: C.ink, fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, marginBottom: 14, outline: "none", boxSizing: "border-box" }}
+            />
+            <div style={{ display: "flex", gap: 10 }}>
+              <button onClick={saveApiKey} style={{ flex: 1, padding: 10, background: C.ink, color: C.bg, border: "none", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, fontWeight: 700, letterSpacing: 2, cursor: "pointer" }}>SAVE</button>
+              <button onClick={() => setShowSettings(false)} style={{ padding: "10px 16px", background: "transparent", color: C.ink3, border: `1px solid ${C.rule}`, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, cursor: "pointer" }}>CANCEL</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Masthead */}
       <div style={{ borderBottom: `3px solid ${C.ink}` }}>
         <div style={{ borderBottom: `1px solid ${C.ink}`, padding: "4px 28px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 2, color: C.ink3 }}>7-AGENT INTELLIGENCE SYSTEM</span>
-            <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 2, color: C.ink3 }}>NSE · BSE · INDIA MARKETS</span>
+            <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 2, color: C.ink3 }}>9-AGENT INTELLIGENCE SYSTEM</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <span className="hide-mobile" style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 2, color: C.ink3 }}>NSE · BSE · INDIA MARKETS</span>
+              <button
+                onClick={() => setShowSettings(true)}
+                style={{
+                  background: localStorage.getItem("geomarket_api_key") ? C.bull : C.bear,
+                  border: "none", color: "#fff",
+                  fontSize: 10, fontWeight: 700,
+                  padding: "4px 14px", cursor: "pointer",
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  letterSpacing: 1
+                }}
+              >
+                {localStorage.getItem("geomarket_api_key") ? "⚙ KEY SET" : "⚙ SET API KEY"}
+              </button>
+            </div>
           </div>
         </div>
         <div style={{ padding: "10px 16px 8px", textAlign: "center" }}>
@@ -856,7 +905,7 @@ export default function GeoMarketMultiAgent() {
           fontSize: 11, fontWeight: 700, letterSpacing: 4,
           marginBottom: 24, transition: "all 0.2s",
         }}>
-          {running ? "▶  AGENTS RUNNING — PLEASE WAIT..." : "LAUNCH 7-AGENT ANALYSIS"}
+          {running ? "▶  AGENTS RUNNING — PLEASE WAIT..." : "LAUNCH 9-AGENT ANALYSIS"}
         </button>
 
         {/* Agent pipeline */}
@@ -1472,7 +1521,7 @@ export default function GeoMarketMultiAgent() {
           <div style={{ textAlign: "center", padding: "60px 20px" }}>
             <div style={{ fontSize: 32, marginBottom: 12, color: C.rule, fontFamily: "'Playfair Display', serif" }}>◎</div>
             <p style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 3, color: C.ink4, margin: 0 }}>AWAITING EVENT INPUT</p>
-            <p style={{ fontSize: 10, color: C.rule, margin: "8px 0 0", fontFamily: "'IBM Plex Mono', monospace" }}>7 agents ready · India-focused</p>
+            <p style={{ fontSize: 10, color: C.rule, margin: "8px 0 0", fontFamily: "'IBM Plex Mono', monospace" }}>9 agents ready · India-focused</p>
           </div>
         )}
       </div>
