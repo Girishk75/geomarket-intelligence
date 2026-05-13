@@ -462,7 +462,7 @@ function repairJSON(raw) {
 }
 
 async function callAgent(prompt) {
-  const apiKey = localStorage.getItem("geomarket_api_key") || "";
+  const apiKey = "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";
   if (!apiKey) throw new Error("No API key. Click ⚙ Settings to add your Anthropic API key.");
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
