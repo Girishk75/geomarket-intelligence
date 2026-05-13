@@ -31,7 +31,7 @@ async function fetchLiveEvents() {
   const messages = [{ role: "user", content: "Search for today's top 6-8 geopolitical and macroeconomic events that could impact Indian stock markets (NSE/BSE). Include India-specific events, global macro developments, and geopolitical tensions. Return ONLY a JSON array of short event strings, each under 90 characters. Example format: [\"event one\", \"event two\"]. No markdown, no explanation." }];
 
   for (let turn = 0; turn < 6; turn++) {
-    const apiKey = "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";
+    const apiKey = "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";
     if (!apiKey) throw new Error("No API key");
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
