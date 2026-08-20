@@ -28,50 +28,35 @@ const FALLBACK_EVENTS = [
 // ─── Live Events Fetcher ──────────────────────────────────────────────────────
 
 async function fetchLiveEvents() {
-  const messages = [{ role: "user", content: "Search for today's top 6-8 geopolitical and macroeconomic events that could impact Indian stock markets (NSE/BSE). Include India-specific events, global macro developments, and geopolitical tensions. Return ONLY a JSON array of short event strings, each under 90 characters. Example format: [\"event one\", \"event two\"]. No markdown, no explanation." }];
+  const apiKey = localStorage.getItem("geomarket_api_key") || "";
+  if (!apiKey) throw new Error("No API key");
 
-  for (let turn = 0; turn < 6; turn++) {
-    const apiKey = localStorage.getItem("geomarket_api_key") || "";
-    if (!apiKey) throw new Error("No API key");
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true"
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 800,
-        system: "You are a financial news curator. Search the web for today's live geopolitical and macro events affecting Indian markets. Respond ONLY with a valid JSON array of 6-8 short event strings. No markdown, no preamble, no explanation. Just the JSON array.",
-        tools: [{ type: "web_search_20250305", name: "web_search" }],
-        messages,
-      }),
-    });
-    if (!res.ok) throw new Error("Events fetch failed");
-    const data = await res.json();
+  const today = new Date().toLocaleDateString("en-IN", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
 
-    // Collect any text
-    const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("");
-    if (text) {
-      const match = text.match(/\[[\s\S]*?\]/);
-      if (match) {
-        try { return JSON.parse(match[0]); } catch (_) {}
-      }
-    }
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true"
+    },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 400,
+      system: "You are a financial news curator for Indian equity markets. Return ONLY a valid JSON array of 6-8 short event strings under 80 chars each. No markdown, no explanation, just the array.",
+      messages: [{
+        role: "user",
+        content: `Today is ${today}. List 6-8 current geopolitical and macro events most likely affecting Indian stock markets right now. Include India-specific news, global macro, and geopolitical tensions. Return ONLY a JSON array of short strings.`
+      }]
+    }),
+  });
 
-    if (data.stop_reason === "end_turn") break;
-
-    if (data.stop_reason === "tool_use") {
-      const toolUse = (data.content || []).filter(b => b.type === "tool_use");
-      if (!toolUse.length) break;
-      messages.push({ role: "assistant", content: data.content });
-      messages.push({ role: "user", content: toolUse.map(b => ({ type: "tool_result", tool_use_id: b.id, content: [] })) });
-      continue;
-    }
-    break;
-  }
+  if (!res.ok) throw new Error("Events fetch failed");
+  const data = await res.json();
+  const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("");
+  const match = text.match(/\[[\s\S]*?\]/);
+  if (match) return JSON.parse(match[0]);
   throw new Error("Could not parse events");
 }
 
@@ -308,7 +293,7 @@ async function callAgent(prompt) {
       "anthropic-dangerous-direct-browser-access": "true"
     },
     body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
+      model: "claude-sonnet-4-6",
       max_tokens: 800,
       system: prompt.system,
       messages: [{ role: "user", content: prompt.user }],
@@ -390,4 +375,991 @@ function Section({ label, children, accent }) {
           color: accent || C.ink3, fontFamily: "'IBM Plex Mono', monospace",
           textTransform: "uppercase"
         }}>{label}</span>
-        <div style={{ flex: 1, height: 1,
+        <div style={{ flex: 1, height: 1, background: C.rule2 }} />
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function ScoreBar({ score }) {
+  const pct = ((score + 10) / 20) * 100;
+  const color = score > 0 ? C.bull : score < 0 ? C.bear : C.neutral;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div style={{ flex: 1, height: 3, background: C.rule2, position: "relative" }}>
+        <div style={{ position: "absolute", left: "50%", top: 0, width: 1, height: 3, background: C.rule }} />
+        <div style={{
+          position: "absolute",
+          left: score >= 0 ? "50%" : `${pct}%`,
+          width: `${(Math.abs(score) / 20) * 100}%`,
+          height: 3, background: color,
+        }} />
+      </div>
+      <span style={{ fontSize: 9, color, fontFamily: "'IBM Plex Mono', monospace", minWidth: 24 }}>
+        {score > 0 ? "+" : ""}{score}
+      </span>
+    </div>
+  );
+}
+
+function ConvictionPips({ score, max = 10 }) {
+  return (
+    <div style={{ display: "flex", gap: 2, alignItems: "center" }}>
+      {Array.from({ length: max }).map((_, i) => (
+        <div key={i} style={{
+          width: 6, height: 6,
+          background: i < score ? C.ink2 : C.rule2,
+          clipPath: "polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)",
+        }} />
+      ))}
+      <span style={{ fontSize: 9, color: C.ink3, marginLeft: 6, fontFamily: "'IBM Plex Mono', monospace" }}>{score}/10</span>
+    </div>
+  );
+}
+
+function AgentRow({ agent, status, duration }) {
+  const isActive  = status === "running";
+  const isDone    = status === "done";
+  const isError   = status === "error";
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: 10,
+      padding: "7px 0",
+      borderBottom: `1px solid ${C.rule2}`,
+      opacity: status === "idle" ? 0.35 : 1,
+      transition: "opacity 0.3s"
+    }}>
+      <span style={{
+        fontFamily: "'IBM Plex Mono', monospace", fontSize: 11,
+        color: isError ? C.bear : isDone ? C.bull : isActive ? C.ink2 : C.ink4,
+        animation: isActive ? "blink 1s step-end infinite" : "none",
+        minWidth: 14, textAlign: "center"
+      }}>
+        {isError ? "✕" : isDone ? "✓" : isActive ? "▶" : "○"}
+      </span>
+      <span style={{ fontSize: 11, fontWeight: 600, color: isActive ? C.ink : isDone ? C.ink2 : C.ink3, fontFamily: "'IBM Plex Mono', monospace", flex: 1 }}>
+        {agent.label}
+      </span>
+      <span style={{ fontSize: 9, color: C.ink4, fontFamily: "'IBM Plex Mono', monospace" }}>
+        {agent.desc}
+      </span>
+      {duration && <span style={{ fontSize: 9, color: C.ink4, fontFamily: "'IBM Plex Mono', monospace", marginLeft: 8 }}>{duration}s</span>}
+    </div>
+  );
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────────
+
+export default function GeoMarketMultiAgent() {
+  const [query, setQuery] = useState("");
+  const [agentStatus, setAgentStatus] = useState({});
+  const [agentData, setAgentData] = useState({});
+  const [agentDuration, setAgentDuration] = useState({});
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState(null);
+  const [activeTab, setActiveTab] = useState("summary");
+  const [expandedAgent, setExpandedAgent] = useState(null);
+  const [liveEvents, setLiveEvents] = useState(FALLBACK_EVENTS);
+  const [eventsLoading, setEventsLoading] = useState(false);
+  const [eventsTimestamp, setEventsTimestamp] = useState(null);
+  const [eventsError, setEventsError] = useState(false);
+
+  async function refreshEvents() {
+    setEventsLoading(true);
+    setEventsError(false);
+    try {
+      const events = await fetchLiveEvents();
+      if (Array.isArray(events) && events.length > 0) {
+        setLiveEvents(events.slice(0, 8));
+        setEventsTimestamp(new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }));
+      }
+    } catch (_) {
+      setEventsError(true);
+    } finally {
+      setEventsLoading(false);
+    }
+  }
+
+  useEffect(() => { refreshEvents(); }, []);
+
+  const result = agentData.synthesis;
+
+  function setStatus(id, s) {
+    setAgentStatus(p => ({ ...p, [id]: s }));
+  }
+
+  async function runAgent(id, promptFn, ...args) {
+    setStatus(id, "running");
+    const t0 = Date.now();
+    try {
+      const data = await callAgent(promptFn(...args));
+      setAgentData(p => ({ ...p, [id]: data }));
+      setAgentDuration(p => ({ ...p, [id]: ((Date.now() - t0) / 1000).toFixed(1) }));
+      setStatus(id, "done");
+      return data;
+    } catch (e) {
+      setStatus(id, "error");
+      throw e;
+    }
+  }
+
+  async function runAnalysis() {
+    if (!query.trim() || running) return;
+    setRunning(true);
+    setError(null);
+    setAgentStatus({});
+    setAgentData({});
+    setAgentDuration({});
+    setActiveTab("summary");
+    try {
+      const delay = ms => new Promise(r => setTimeout(r, ms));
+      const orch  = await runAgent("orchestrator", orchestratorPrompt, query);
+      await delay(5000);
+      const geo   = await runAgent("geopolitical",  geopoliticalPrompt, query, orch);
+      await delay(5000);
+      const macro = await runAgent("macro",          macroPrompt,        query, orch, geo);
+      await delay(5000);
+      const sects = await runAgent("sector",         sectorPrompt,       query, orch, geo, macro);
+      await delay(5000);
+      const picks = await runAgent("stockpicker",    stockPickerPrompt,  query, orch, geo, macro, sects);
+      const tickers = picks.top_picks?.map(p => p.ticker).filter(Boolean) || [];
+      setStatus("technical", "running");
+      const t0tech = Date.now();
+      const techData = await fetchYahooData(tickers);
+      setAgentData(p => ({ ...p, yahooRaw: techData }));
+      setAgentDuration(p => ({ ...p, technical: ((Date.now() - t0tech) / 1000).toFixed(1) }));
+      const tech  = await runAgent("technical",     technicalPrompt,    query, geo, macro, picks, techData);
+      await delay(5000);
+      const risks   = await runAgent("risk",     riskPrompt,     query, orch, geo, macro, sects, picks);
+      await delay(5000);
+      const veteran = await runAgent("veteran",  veteranPrompt,  query, geo, macro, sects, picks, risks, tech);
+      await delay(5000);
+      await runAgent("synthesis", synthesisPrompt, query, orch, geo, macro, sects, picks, risks, tech, veteran);
+      setActiveTab("summary");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  const tabs = result ? [
+    { id: "summary", label: "Summary"  },
+    { id: "picks",   label: "Picks"    },
+    { id: "sectors", label: "Sectors"  },
+    { id: "geo",     label: "Geo Intel"},
+    { id: "macro",   label: "Macro"    },
+    { id: "risks",   label: "Risks"    },
+    { id: "veteran",  label: "⚑ Veteran" },
+    { id: "technical", label: "Technical" },
+    { id: "raw",       label: "Agents"   },
+  ] : [];
+
+  const [showSettings, setShowSettings] = useState(false);
+  const [apiKeyInput, setApiKeyInput] = useState(localStorage.getItem("geomarket_api_key") || "");
+
+  function saveApiKey() {
+    localStorage.setItem("geomarket_api_key", apiKeyInput.trim());
+    setShowSettings(false);
+  }
+
+  return (
+    <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "Georgia, 'Times New Roman', serif", color: C.ink, paddingBottom: 60 }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=IBM+Plex+Mono:wght@400;600;700&display=swap');
+        * { box-sizing: border-box; }
+        @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+        @keyframes fadeUp { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+        textarea::placeholder { color: ${C.rule}; font-family: 'IBM Plex Mono', monospace; font-size: 12px; }
+        textarea { font-family: 'IBM Plex Mono', monospace !important; }
+        ::-webkit-scrollbar { width: 3px; }
+        ::-webkit-scrollbar-track { background: ${C.bg}; }
+        ::-webkit-scrollbar-thumb { background: ${C.rule}; }
+        button { font-family: 'IBM Plex Mono', monospace; cursor: pointer; }
+
+        /* ── Responsive ── */
+        .masthead-title { font-size: 30px; }
+        .main-pad { padding: 24px 20px 0; }
+        .sig-strip  { grid-template-columns: repeat(5, 1fr); }
+        .grid-4     { grid-template-columns: repeat(4, 1fr); }
+        .grid-2     { grid-template-columns: 1fr 1fr; }
+        .grid-2-macro { grid-template-columns: 1fr 1fr; }
+        .tab-bar    { overflow-x: auto; -webkit-overflow-scrolling: touch; white-space: nowrap; }
+        .picks-targets { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+        .india-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+        @media (max-width: 640px) {
+          .masthead-title { font-size: 20px !important; }
+          .main-pad { padding: 16px 12px 0 !important; }
+          .sig-strip  { grid-template-columns: repeat(3, 1fr) !important; }
+          .grid-4     { grid-template-columns: 1fr 1fr !important; }
+          .grid-2     { grid-template-columns: 1fr !important; }
+          .grid-2-macro { grid-template-columns: 1fr 1fr !important; }
+          .india-grid { grid-template-columns: 1fr !important; }
+          .preset-bar { display: none; }
+          .hide-mobile { display: none !important; }
+        }
+      `}</style>
+
+      {/* Settings Modal */}
+      {showSettings && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div style={{ background: C.paper, border: `2px solid ${C.ink}`, padding: 28, width: 400, maxWidth: "100%" }}>
+            <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 18, fontWeight: 700, color: C.ink, marginBottom: 6 }}>Anthropic API Key</div>
+            <p style={{ fontSize: 11, color: C.ink3, fontFamily: "'IBM Plex Mono', monospace", marginBottom: 16, lineHeight: 1.7 }}>
+              Your key is stored only in this browser. Never sent to GitHub or any server. Get yours at console.anthropic.com
+            </p>
+            <input
+              type="password"
+              value={apiKeyInput}
+              onChange={e => setApiKeyInput(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && saveApiKey()}
+              placeholder="sk-ant-api03-..."
+              style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.rule}`, background: C.bg, color: C.ink, fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, marginBottom: 14, outline: "none", boxSizing: "border-box" }}
+            />
+            <div style={{ display: "flex", gap: 10 }}>
+              <button onClick={saveApiKey} style={{ flex: 1, padding: 10, background: C.ink, color: C.bg, border: "none", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, fontWeight: 700, letterSpacing: 2, cursor: "pointer" }}>SAVE</button>
+              <button onClick={() => setShowSettings(false)} style={{ padding: "10px 16px", background: "transparent", color: C.ink3, border: `1px solid ${C.rule}`, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, cursor: "pointer" }}>CANCEL</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Masthead */}
+      <div style={{ borderBottom: `3px solid ${C.ink}` }}>
+        <div style={{ borderBottom: `1px solid ${C.ink}`, padding: "4px 28px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 2, color: C.ink3 }}>9-AGENT INTELLIGENCE SYSTEM</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <span className="hide-mobile" style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 2, color: C.ink3 }}>NSE · BSE · INDIA MARKETS</span>
+              <button
+                onClick={() => setShowSettings(true)}
+                style={{
+                  background: localStorage.getItem("geomarket_api_key") ? C.bull : C.bear,
+                  border: "none", color: "#fff",
+                  fontSize: 10, fontWeight: 700,
+                  padding: "4px 14px", cursor: "pointer",
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  letterSpacing: 1
+                }}
+              >
+                {localStorage.getItem("geomarket_api_key") ? "⚙ KEY SET" : "⚙ SET API KEY"}
+              </button>
+            </div>
+          </div>
+        </div>
+        <div style={{ padding: "10px 16px 8px", textAlign: "center" }}>
+          <h1 className="masthead-title" style={{
+            fontFamily: "'Playfair Display', Georgia, serif",
+            fontWeight: 900, margin: 0, letterSpacing: -0.5,
+            color: C.ink, lineHeight: 1.1
+          }}>
+            GeoMarket Intelligence
+          </h1>
+          <p className="hide-mobile" style={{ margin: "4px 0 0", fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: C.ink3, letterSpacing: 1 }}>
+            Geopolitical Events → Market Impact → Stock Signals
+          </p>
+        </div>
+      </div>
+
+      <div className="main-pad" style={{ maxWidth: 860, margin: "0 auto" }}>
+
+        {/* Input */}
+        <div style={{ border: `1px solid ${C.rule}`, background: C.paper, marginBottom: 12 }}>
+          <div style={{ padding: "5px 14px", borderBottom: `1px solid ${C.rule2}`, display: "flex", justifyContent: "space-between" }}>
+            <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 2.5, color: C.ink3 }}>EVENT INPUT</span>
+            <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", color: C.rule }}>PRESS ENTER TO ANALYSE</span>
+          </div>
+          <textarea
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runAnalysis(); } }}
+            placeholder="Enter geopolitical event, news headline, or macro development..."
+            rows={2}
+            style={{
+              width: "100%", background: "transparent", border: "none", outline: "none",
+              color: C.ink, fontSize: 14, padding: "14px 16px",
+              resize: "none", lineHeight: 1.7,
+            }}
+          />
+        </div>
+
+        {/* Live Events */}
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 7 }}>
+            <span style={{ fontSize: 8, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 2.5, color: C.ink3 }}>
+              TODAY'S EVENTS
+            </span>
+            {eventsTimestamp && !eventsError && (
+              <span style={{ fontSize: 8, fontFamily: "'IBM Plex Mono', monospace", color: C.bull }}>
+                ● LIVE · {eventsTimestamp}
+              </span>
+            )}
+            {eventsError && (
+              <span style={{ fontSize: 8, fontFamily: "'IBM Plex Mono', monospace", color: C.ink4 }}>
+                ○ FALLBACK
+              </span>
+            )}
+            <button
+              onClick={refreshEvents}
+              disabled={eventsLoading}
+              style={{
+                marginLeft: "auto", background: "transparent",
+                border: `1px solid ${C.rule}`, color: C.ink3,
+                fontSize: 9, padding: "2px 10px", cursor: "pointer",
+                fontFamily: "'IBM Plex Mono', monospace",
+                opacity: eventsLoading ? 0.5 : 1,
+              }}
+            >
+              {eventsLoading ? "FETCHING..." : "↻ REFRESH"}
+            </button>
+          </div>
+          <div className="preset-bar" style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+            {liveEvents.map((p, i) => (
+              <button key={i} onClick={() => setQuery(p)} style={{
+                background: "transparent", border: `1px solid ${C.rule}`,
+                color: C.ink3, fontSize: 9, padding: "3px 10px",
+                letterSpacing: 0.3, transition: "all 0.1s",
+                fontFamily: "'IBM Plex Mono', monospace",
+                textAlign: "left",
+              }}
+                onMouseEnter={e => { e.currentTarget.style.background = C.ink; e.currentTarget.style.color = C.bg; }}
+                onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = C.ink3; }}
+              >{p}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* Run button */}
+        <button onClick={runAnalysis} disabled={running || !query.trim()} style={{
+          width: "100%", padding: "12px",
+          background: running ? C.paper : C.ink,
+          border: `1px solid ${C.ink}`,
+          color: running ? C.ink : C.bg,
+          fontSize: 11, fontWeight: 700, letterSpacing: 4,
+          marginBottom: 24, transition: "all 0.2s",
+        }}>
+          {running ? "▶  AGENTS RUNNING — PLEASE WAIT..." : "LAUNCH 9-AGENT ANALYSIS"}
+        </button>
+
+        {/* Agent pipeline */}
+        {Object.keys(agentStatus).length > 0 && (
+          <div style={{ border: `1px solid ${C.rule}`, background: C.paper, padding: "14px 18px", marginBottom: 24, animation: "fadeUp 0.3s ease" }}>
+            <div style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 3, color: C.ink3, marginBottom: 8 }}>AGENT PIPELINE</div>
+            {AGENTS.map(a => (
+              <AgentRow key={a.id} agent={a} status={agentStatus[a.id] || "idle"} duration={agentDuration[a.id]} />
+            ))}
+          </div>
+        )}
+
+        {/* Error */}
+        {error && (
+          <div style={{ border: `1px solid ${C.bear}`, background: C.paper, padding: "12px 16px", color: C.bear, fontSize: 12, fontFamily: "'IBM Plex Mono', monospace", marginBottom: 20 }}>
+            ⚠  {error}
+          </div>
+        )}
+
+        {/* Results */}
+        {result && (
+          <div style={{ animation: "fadeUp 0.4s ease" }}>
+
+            {/* Headline banner */}
+            <div style={{ borderTop: `3px double ${C.ink}`, borderBottom: `3px double ${C.ink}`, padding: "16px 0", marginBottom: 20, textAlign: "center" }}>
+              <h2 style={{
+                fontFamily: "'Playfair Display', serif", fontSize: 22, fontWeight: 900,
+                margin: "0 0 8px", color: C.ink, lineHeight: 1.25
+              }}>{result.headline}</h2>
+              <div style={{ display: "flex", justifyContent: "center", gap: 12, flexWrap: "wrap" }}>
+                <Stamp text={`${result.macro_signal} · ${result.signal_strength}`}
+                  color={result.macro_signal === "RISK-ON" ? C.bull : result.macro_signal === "RISK-OFF" ? C.bear : C.neutral} />
+                <Stamp text={result.time_horizon} />
+                <Stamp text={`RISK: ${agentData.risk?.overall_risk_rating}`}
+                  color={agentData.risk?.overall_risk_rating === "HIGH" ? C.bear : agentData.risk?.overall_risk_rating === "LOW" ? C.bull : C.neutral} />
+              </div>
+            </div>
+
+            {/* Tab navigation - newspaper section style */}
+            <div className="tab-bar" style={{ display: "flex", borderBottom: `2px solid ${C.ink}`, marginBottom: 20 }}>
+              {tabs.map(t => (
+                <button key={t.id} onClick={() => setActiveTab(t.id)} style={{
+                  background: activeTab === t.id ? C.ink : "transparent",
+                  border: "none",
+                  borderRight: `1px solid ${C.rule}`,
+                  color: activeTab === t.id ? C.bg : C.ink3,
+                  padding: "7px 16px", fontSize: 10, fontWeight: 700, letterSpacing: 1.5,
+                  whiteSpace: "nowrap", transition: "all 0.15s",
+                }}>{t.label.toUpperCase()}</button>
+              ))}
+            </div>
+
+            {/* ── SUMMARY ── */}
+            {activeTab === "summary" && (
+              <div>
+
+                {/* Veteran Verdict Banner */}
+                {agentData.veteran && (
+                  <div style={{
+                    background: agentData.veteran.overall_verdict === "APPROVED" ? "#f0f7f0" : agentData.veteran.overall_verdict === "CHALLENGED" ? "#fdf2f2" : "#fdf8f0",
+                    border: `1px solid ${agentData.veteran.overall_verdict === "APPROVED" ? C.bull : agentData.veteran.overall_verdict === "CHALLENGED" ? C.bear : C.neutral}`,
+                    borderLeft: `4px solid ${agentData.veteran.overall_verdict === "APPROVED" ? C.bull : agentData.veteran.overall_verdict === "CHALLENGED" ? C.bear : C.neutral}`,
+                    padding: "12px 16px", marginBottom: 14
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
+                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, fontWeight: 700, color: C.ink }}>⚑  THE VETERAN</span>
+                      <Stamp
+                        text={agentData.veteran.overall_verdict}
+                        color={agentData.veteran.overall_verdict === "APPROVED" ? C.bull : agentData.veteran.overall_verdict === "CHALLENGED" ? C.bear : C.neutral}
+                      />
+                      {agentData.veteran.overrides?.length > 0 && <Stamp text={`${agentData.veteran.overrides.length} OVERRIDE${agentData.veteran.overrides.length > 1 ? "S" : ""}`} color={C.bear} />}
+                      {agentData.veteran.missed_picks?.length > 0 && <Stamp text={`${agentData.veteran.missed_picks.length} MISSED`} color={C.neutral} />}
+                    </div>
+                    <p style={{ margin: "0 0 6px", fontSize: 12, fontWeight: 700, color: C.ink, fontStyle: "italic" }}>"{agentData.veteran.verdict_stamp}"</p>
+                    <p style={{ margin: 0, fontSize: 11, color: C.ink2, lineHeight: 1.65 }}>{agentData.veteran.final_verdict}</p>
+                  </div>
+                )}
+
+                {/* Signal strip */}
+                <div className="sig-strip" style={{ display: "grid", border: `1px solid ${C.rule}`, background: C.paper, marginBottom: 14 }}>
+                  {[
+                    { label: "SIGNAL", value: result.macro_signal, color: result.macro_signal === "RISK-ON" ? C.bull : result.macro_signal === "RISK-OFF" ? C.bear : C.neutral },
+                    { label: "HORIZON", value: result.time_horizon, color: C.ink2 },
+                    { label: "INR", value: `${agentData.macro?.inr_outlook?.direction || ""} ${agentData.macro?.inr_outlook?.magnitude || ""}`.trim(), color: agentData.macro?.inr_outlook?.direction === "APPRECIATION" ? C.bull : C.bear },
+                    { label: "FII FLOWS", value: agentData.macro?.fii_flow_expectation, color: agentData.macro?.fii_flow_expectation === "INFLOW" ? C.bull : agentData.macro?.fii_flow_expectation === "OUTFLOW" ? C.bear : C.neutral },
+                    { label: "OVERALL RISK", value: agentData.risk?.overall_risk_rating, color: agentData.risk?.overall_risk_rating === "HIGH" ? C.bear : agentData.risk?.overall_risk_rating === "LOW" ? C.bull : C.neutral },
+                  ].map((item, i) => (
+                    <div key={i} style={{ padding: "10px 14px", borderRight: i < 4 ? `1px solid ${C.rule2}` : "none", textAlign: "center" }}>
+                      <div style={{ fontSize: 8, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 2, color: C.ink4, marginBottom: 4 }}>{item.label}</div>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: item.color, fontFamily: "'IBM Plex Mono', monospace" }}>{item.value}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Top picks */}
+                {result.final_picks?.length > 0 && (
+                  <div style={{ background: C.paper, border: `1px solid ${C.rule}`, marginBottom: 14 }}>
+                    <div style={{ padding: "7px 14px", borderBottom: `1px solid ${C.rule}`, display: "flex", justifyContent: "space-between" }}>
+                      <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 3, color: C.ink3 }}>ACT NOW — TOP PICKS</span>
+                      <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", color: C.ink4 }}>CONVICTION  HORIZON</span>
+                    </div>
+                    {result.final_picks.map((p, i) => {
+                      const live = agentData.yahooRaw?.find(t => t.ticker === p.ticker + ".NS" || t.ticker === p.ticker);
+                      const lp = live && !live.error ? parseFloat(live.price) : null;
+                      const chg = live && !live.error ? live.change1d : null;
+                      return (
+                        <div key={i} style={{ padding: "9px 14px", borderBottom: i < result.final_picks.length - 1 ? `1px solid ${C.rule2}` : "none", borderLeft: `3px solid ${actC(p.action)}` }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 5, flexWrap: "wrap" }}>
+                            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 700, color: C.ink, minWidth: 70 }}>{p.ticker}</span>
+                            <Stamp text={p.action} color={actC(p.action)} />
+                            {lp ? (
+                              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, fontWeight: 700, color: C.ink }}>
+                                ₹{lp.toFixed(2)}
+                                {chg != null && <span style={{ fontSize: 10, color: chg >= 0 ? C.bull : C.bear, marginLeft: 5 }}>{chg >= 0 ? "▲" : "▼"}{Math.abs(chg)}%</span>}
+                              </span>
+                            ) : (
+                              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: C.ink4 }}>LIVE N/A</span>
+                            )}
+                            <span style={{ marginLeft: "auto", fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: C.ink2, background: C.bg, padding: "2px 8px", border: `1px solid ${C.rule}` }}>
+                              ⏱ {p.holding_period || result.time_horizon}
+                            </span>
+                          </div>
+                          <span style={{ fontSize: 11, color: C.ink2 }}>{p.one_liner}</span>
+                          {(p.bear_pct != null || p.base_pct != null) && (
+                            <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                              {lp && <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: C.bear, border: `1px solid ${C.bear}30`, padding: "2px 7px" }}>BEAR ₹{(lp*(1+p.bear_pct/100)).toFixed(0)} ({p.bear_pct}%)</span>}
+                              {lp && <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: C.ink2, border: `1px solid ${C.rule}`, padding: "2px 7px" }}>BASE ₹{(lp*(1+p.base_pct/100)).toFixed(0)} (+{p.base_pct}%)</span>}
+                              {lp && <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: C.bull, border: `1px solid ${C.bull}30`, padding: "2px 7px" }}>BULL ₹{(lp*(1+p.bull_pct/100)).toFixed(0)} (+{p.bull_pct}%)</span>}
+                              {!lp && <><span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: C.bear, border: `1px solid ${C.bear}30`, padding: "2px 7px" }}>BEAR {p.bear_pct}%</span>
+                              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: C.ink2, border: `1px solid ${C.rule}`, padding: "2px 7px" }}>BASE +{p.base_pct}%</span>
+                              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: C.bull, border: `1px solid ${C.bull}30`, padding: "2px 7px" }}>BULL +{p.bull_pct}%</span></>}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Sectors grid */}
+                {result.top_sectors?.length > 0 && (
+                  <div style={{ background: C.paper, border: `1px solid ${C.rule}`, marginBottom: 14 }}>
+                    <div style={{ padding: "7px 14px", borderBottom: `1px solid ${C.rule}` }}>
+                      <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 3, color: C.ink3 }}>SECTORS AT A GLANCE</span>
+                    </div>
+                    <div className="grid-2" style={{ display: "grid" }}>
+                      {result.top_sectors.map((s, i) => (
+                        <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 14px", borderRight: i % 2 === 0 ? `1px solid ${C.rule2}` : "none", borderBottom: i < result.top_sectors.length - 2 ? `1px solid ${C.rule2}` : "none" }}>
+                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: bull(s.impact) }}>{s.impact === "BULLISH" ? "▲" : s.impact === "BEARISH" ? "▼" : "—"}</span>
+                          <span style={{ fontSize: 11, color: C.ink, flex: 1 }}>{s.name}</span>
+                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: bull(s.impact), minWidth: 28 }}>{s.score > 0 ? "+" : ""}{s.score}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Key risks */}
+                {result.key_risks?.length > 0 && (
+                  <div style={{ background: C.paper, border: `1px solid ${C.rule}`, marginBottom: 14 }}>
+                    <div style={{ padding: "7px 14px", borderBottom: `1px solid ${C.rule}` }}>
+                      <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 3, color: C.bear }}>WATCH OUT FOR</span>
+                    </div>
+                    {result.key_risks.map((r, i) => (
+                      <div key={i} style={{ display: "flex", gap: 10, padding: "8px 14px", borderBottom: i < result.key_risks.length - 1 ? `1px solid ${C.rule2}` : "none" }}>
+                        <span style={{ color: C.bear, fontSize: 10, marginTop: 2 }}>◆</span>
+                        <span style={{ fontSize: 12, color: C.ink2, lineHeight: 1.5 }}>{r}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* India angle + contrarian side by side */}
+                <div className="india-grid" style={{ display: "grid", gap: 10 }}>
+                  <div style={{ background: C.paper, border: `1px solid ${C.rule}`, padding: "12px 14px", borderLeft: `3px solid ${C.ink2}` }}>
+                    <div style={{ fontSize: 8, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 2.5, color: C.ink3, marginBottom: 6 }}>🇮🇳 INDIA ANGLE</div>
+                    <p style={{ margin: 0, fontSize: 11, color: C.ink2, lineHeight: 1.65 }}>{result.india_angle}</p>
+                  </div>
+                  <div style={{ background: C.paper, border: `1px solid ${C.rule}`, padding: "12px 14px", borderLeft: `3px solid ${C.ink4}` }}>
+                    <div style={{ fontSize: 8, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 2.5, color: C.ink3, marginBottom: 6 }}>CONTRARIAN VIEW</div>
+                    <p style={{ margin: 0, fontSize: 11, color: C.ink2, lineHeight: 1.65, fontStyle: "italic" }}>{result.contrarian_take}</p>
+                  </div>
+                </div>
+
+              </div>
+            )}
+
+
+            {/* ── PICKS ── */}
+            {activeTab === "picks" && (
+              <div>
+                {agentData.stockpicker?.theme_play && (
+                  <p style={{ fontSize: 13, color: C.ink2, fontStyle: "italic", marginBottom: 16, padding: "0 4px", lineHeight: 1.7, borderLeft: `3px solid ${C.rule}`, paddingLeft: 14 }}>
+                    {agentData.stockpicker.theme_play}
+                  </p>
+                )}
+                {result.final_picks?.map((p, i) => (
+                  <div key={i} style={{ background: C.paper, border: `1px solid ${C.rule}`, borderLeft: `4px solid ${actC(p.action)}`, marginBottom: 12 }}>
+                    {/* Header */}
+                    <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.rule2}` }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
+                        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 15, fontWeight: 700, color: C.ink }}>{p.ticker}</span>
+                        <span style={{ fontSize: 11, color: C.ink3 }}>{p.company}</span>
+                        <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+                          <Stamp text={p.action} color={actC(p.action)} />
+                          {(() => { const td = agentData.technical?.stocks?.find(t => t.ticker === p.ticker + ".NS" || t.ticker === p.ticker); return td ? <Stamp text={td.technical_signal} color={td.technical_signal === "BULLISH" ? C.bull : td.technical_signal === "BEARISH" ? C.bear : C.neutral} /> : null; })()}
+                        </div>
+                      </div>
+                      <div style={{ marginBottom: 6 }}><ConvictionPips score={p.conviction} /></div>
+                      <p style={{ margin: 0, fontSize: 12, color: C.ink2, lineHeight: 1.7 }}>{p.one_liner}</p>
+                    </div>
+                    {/* Live price + targets */}
+                    {(() => {
+                      const td = agentData.technical?.stocks?.find(t => t.ticker === p.ticker + ".NS" || t.ticker === p.ticker);
+                      const lp = td?.price ? parseFloat(td.price) : null;
+                      return (
+                        <div style={{ padding: "10px 16px" }}>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 0, border: `1px solid ${C.rule2}`, marginBottom: 8 }}>
+                            {[
+                              { label: "LIVE PRICE", value: lp ? "₹" + lp.toFixed(2) : "—", color: C.ink },
+                              { label: "BEAR CASE", value: (p.bear_pct != null && lp) ? "₹" + (lp * (1 + p.bear_pct/100)).toFixed(2) + " (" + (p.bear_pct > 0 ? "+" : "") + p.bear_pct + "%)" : (p.bear_pct != null ? (p.bear_pct > 0 ? "+" : "") + p.bear_pct + "%" : "—"), color: C.bear },
+                              { label: "BASE CASE", value: (p.base_pct != null && lp) ? "₹" + (lp * (1 + p.base_pct/100)).toFixed(2) + " (+" + p.base_pct + "%)" : (p.base_pct != null ? "+" + p.base_pct + "%" : "—"), color: C.ink2 },
+                              { label: "BULL CASE", value: (p.bull_pct != null && lp) ? "₹" + (lp * (1 + p.bull_pct/100)).toFixed(2) + " (+" + p.bull_pct + "%)" : (p.bull_pct != null ? "+" + p.bull_pct + "%" : "—"), color: C.bull },
+                            ].map((cell, ci) => (
+                              <div key={ci} style={{ padding: "8px 10px", borderRight: ci < 3 ? `1px solid ${C.rule2}` : "none", textAlign: "center" }}>
+                                <div style={{ fontSize: 7, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 1.5, color: C.ink4, marginBottom: 4 }}>{cell.label}</div>
+                                <div style={{ fontSize: 10, fontWeight: 700, color: cell.color, fontFamily: "'IBM Plex Mono', monospace" }}>{cell.value}</div>
+                              </div>
+                            ))}
+                          </div>
+                          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: C.ink2, background: C.bg, padding: "2px 8px", border: `1px solid ${C.rule}` }}>⏱ {p.holding_period || result.time_horizon}</span>
+                            {td && !td.error && <>
+                              {td.rangePos != null && <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", color: C.ink4 }}>52W range: {td.rangePos}%</span>}
+                              {td.ma50 && <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", color: td.aboveMa50 ? C.bull : C.bear }}>MA50: ₹{td.ma50} {td.aboveMa50 ? "▲" : "▼"}</span>}
+                              {td.volRatio && <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", color: td.volRatio > 1.5 ? C.bull : C.ink4 }}>Vol: {td.volRatio}x avg</span>}
+                            </>}
+                            {td?.error && <span style={{ fontSize: 9, color: C.bear, fontFamily: "'IBM Plex Mono', monospace" }}>Live data unavailable</span>}
+                          </div>
+                          {td?.technical_note && <p style={{ margin: "6px 0 0", fontSize: 11, color: C.ink3, fontStyle: "italic" }}>"{td.technical_note}"</p>}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                ))}
+
+                {agentData.stockpicker?.avoid_list?.length > 0 && (
+                  <div style={{ marginTop: 16 }}>
+                    <div style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 3, color: C.bear, marginBottom: 8 }}>AVOID</div>
+                    {agentData.stockpicker.avoid_list.map((a, i) => (
+                      <div key={i} style={{ background: C.paper, border: `1px solid ${C.rule}`, borderLeft: `4px solid ${C.bear}`, padding: "10px 14px", marginBottom: 6, display: "flex", gap: 12 }}>
+                        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, fontWeight: 700, color: C.bear }}>{a.company}</span>
+                        <span style={{ fontSize: 11, color: C.ink3 }}>{a.reason}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div style={{ marginTop: 16, padding: "12px 16px", background: C.paper, border: `1px solid ${C.rule}` }}>
+                  <div style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 3, color: C.ink3, marginBottom: 10 }}>WATCHLIST</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                    {result.watchlist?.map((t, i) => (
+                      <span key={i} style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, fontWeight: 700, color: C.bull, border: `1px solid ${C.bull}`, padding: "3px 12px" }}>{t}</span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ── SECTORS ── */}
+            {activeTab === "sectors" && agentData.sector?.sectors && (
+              <div>
+                {agentData.sector.sectors.map((s, i) => (
+                  <div key={i} style={{ background: C.paper, border: `1px solid ${C.rule}`, borderLeft: `4px solid ${bull(s.impact)}`, marginBottom: 14 }}>
+                    <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.rule2}` }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{s.name}</span>
+                        <Stamp text={s.impact} color={bull(s.impact)} />
+                        <Stamp text={`CONVICTION: ${s.conviction}`} />
+                        <div style={{ marginLeft: "auto", width: 80 }}><ScoreBar score={s.impact_score} /></div>
+                      </div>
+                      <p style={{ margin: "0 0 8px", fontSize: 12, color: C.ink2, lineHeight: 1.7 }}>{s.thesis}</p>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                        {s.key_drivers?.map((d, j) => (
+                          <span key={j} style={{ fontSize: 9, color: C.ink3, padding: "2px 8px", border: `1px solid ${C.rule2}`, fontFamily: "'IBM Plex Mono', monospace" }}>{d}</span>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      {s.companies?.map((c, j) => (
+                        <div key={j} style={{ display: "flex", gap: 12, padding: "10px 16px", borderBottom: j < s.companies.length - 1 ? `1px solid ${C.rule2}` : "none" }}>
+                          <span style={{ color: bull(c.impact), fontSize: 10, marginTop: 2, minWidth: 10 }}>{c.impact === "BULLISH" ? "▲" : c.impact === "BEARISH" ? "▼" : "—"}</span>
+                          <div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
+                              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, fontWeight: 700, color: C.ink }}>{c.name}</span>
+                              <Stamp text={c.market_cap} />
+                              <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", color: C.ink3, marginLeft: "auto" }}>{c.conviction_score}/10</span>
+                            </div>
+                            <p style={{ margin: 0, fontSize: 11, color: C.ink3, lineHeight: 1.6 }}>{c.reason}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* ── GEO INTEL ── */}
+            {activeTab === "geo" && agentData.geopolitical && (
+              <div>
+                {[
+                  { label: "CONTEXT",              value: agentData.geopolitical.context },
+                  { label: "HISTORICAL PARALLEL",  value: agentData.geopolitical.historical_parallel },
+                  { label: "INDIA — DIRECT IMPACT", value: agentData.geopolitical.india_direct_impact },
+                  { label: "INDIA — INDIRECT IMPACT", value: agentData.geopolitical.india_indirect_impact },
+                  { label: "ESCALATION PATH",      value: agentData.geopolitical.escalation_path },
+                ].map(item => (
+                  <div key={item.label} style={{ background: C.paper, border: `1px solid ${C.rule}`, padding: "14px 18px", marginBottom: 10 }}>
+                    <div style={{ fontSize: 8, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 3, color: C.ink3, marginBottom: 8 }}>{item.label}</div>
+                    <p style={{ margin: 0, fontSize: 13, color: C.ink2, lineHeight: 1.8 }}>{item.value}</p>
+                  </div>
+                ))}
+                {agentData.geopolitical.resolution_scenarios && (
+                  <div style={{ background: C.paper, border: `1px solid ${C.rule}`, overflow: "hidden" }}>
+                    <div style={{ padding: "8px 16px", borderBottom: `1px solid ${C.rule}` }}>
+                      <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 3, color: C.ink3 }}>RESOLUTION SCENARIOS</span>
+                    </div>
+                    {agentData.geopolitical.resolution_scenarios.map((sc, i) => (
+                      <div key={i} style={{ padding: "12px 16px", borderBottom: i < 2 ? `1px solid ${C.rule2}` : "none", borderLeft: `4px solid ${i === 0 ? C.neutral : i === 1 ? C.bull : C.bear}` }}>
+                        <div style={{ display: "flex", gap: 10, marginBottom: 4, alignItems: "center" }}>
+                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, fontWeight: 700, color: C.ink }}>{sc.scenario}</span>
+                          <Stamp text={`${sc.probability}%`} />
+                        </div>
+                        <p style={{ margin: 0, fontSize: 12, color: C.ink3, lineHeight: 1.6 }}>{sc.market_implication}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── MACRO ── */}
+            {activeTab === "macro" && agentData.macro && (
+              <div>
+                <div className="grid-2-macro" style={{ display: "grid", gap: 0, border: `1px solid ${C.rule}`, background: C.paper, marginBottom: 14 }}>
+                  {[
+                    { label: "MACRO SIGNAL",   value: `${agentData.macro.macro_signal} · ${agentData.macro.signal_strength}`, color: agentData.macro.macro_signal === "RISK-ON" ? C.bull : C.bear },
+                    { label: "INR OUTLOOK",    value: `${agentData.macro.inr_outlook?.direction} (${agentData.macro.inr_outlook?.magnitude})`, color: C.ink2 },
+                    { label: "FII FLOW",       value: agentData.macro.fii_flow_expectation, color: agentData.macro.fii_flow_expectation === "INFLOW" ? C.bull : C.bear },
+                    { label: "INFLATION",      value: agentData.macro.inflation_impact, color: agentData.macro.inflation_impact === "UP" ? C.bear : C.bull },
+                    { label: "RBI RESPONSE",   value: agentData.macro.rbi_likely_response?.replace(/_/g," "), color: C.ink2 },
+                    { label: "CRUDE OIL",      value: agentData.macro.crude_oil_impact, color: agentData.macro.crude_oil_impact === "UP" ? C.bear : C.bull },
+                    { label: "GOLD",           value: agentData.macro.gold_impact, color: agentData.macro.gold_impact === "UP" ? C.bull : C.neutral },
+                    { label: "TRADE BALANCE",  value: agentData.macro.trade_balance_effect, color: agentData.macro.trade_balance_effect === "WIDEN" ? C.bear : C.bull },
+                  ].map((item, i) => (
+                    <div key={i} style={{ padding: "12px 14px", borderRight: i % 2 === 0 ? `1px solid ${C.rule2}` : "none", borderBottom: i < 6 ? `1px solid ${C.rule2}` : "none" }}>
+                      <div style={{ fontSize: 8, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 2, color: C.ink4, marginBottom: 5 }}>{item.label}</div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: item.color, fontFamily: "'IBM Plex Mono', monospace" }}>{item.value}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ background: C.paper, border: `1px solid ${C.rule}`, padding: "14px 18px", borderLeft: `4px solid ${C.ink}`, marginBottom: 10 }}>
+                  <div style={{ fontSize: 8, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 3, color: C.ink3, marginBottom: 8 }}>WHAT RETAIL INVESTORS MISS</div>
+                  <p style={{ margin: 0, fontSize: 13, color: C.ink, lineHeight: 1.8 }}>{agentData.macro.key_macro_insight}</p>
+                </div>
+                <div style={{ background: C.paper, border: `1px solid ${C.rule}`, padding: "14px 18px" }}>
+                  <div style={{ fontSize: 8, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 3, color: C.ink3, marginBottom: 8 }}>INR REASONING</div>
+                  <p style={{ margin: 0, fontSize: 13, color: C.ink2, lineHeight: 1.8 }}>{agentData.macro.inr_outlook?.reasoning}</p>
+                </div>
+              </div>
+            )}
+
+            {/* ── RISKS ── */}
+            {activeTab === "risks" && agentData.risk && (
+              <div>
+                {agentData.risk.risk_flags?.map((r, i) => (
+                  <div key={i} style={{ background: C.paper, border: `1px solid ${C.rule}`, borderLeft: `4px solid ${r.severity === "CRITICAL" || r.severity === "HIGH" ? C.bear : C.neutral}`, padding: "12px 16px", marginBottom: 10 }}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: C.ink }}>{r.title}</span>
+                      <Stamp text={r.severity} color={r.severity === "CRITICAL" || r.severity === "HIGH" ? C.bear : C.neutral} />
+                      <Stamp text={`PROB: ${r.probability}`} />
+                      {r.affected_picks?.length > 0 && <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", color: C.bear }}>{r.affected_picks.join(", ")}</span>}
+                    </div>
+                    <p style={{ margin: 0, fontSize: 12, color: C.ink2, lineHeight: 1.7 }}>{r.description}</p>
+                  </div>
+                ))}
+                <div style={{ background: C.paper, border: `1px solid ${C.rule}`, borderLeft: `4px solid ${C.bear}`, padding: "14px 18px", marginBottom: 10 }}>
+                  <div style={{ fontSize: 8, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 3, color: C.bear, marginBottom: 8 }}>BEAR CASE</div>
+                  <p style={{ margin: 0, fontSize: 13, color: C.ink2, lineHeight: 1.8 }}>{agentData.risk.bear_case}</p>
+                </div>
+                <div style={{ background: C.paper, border: `1px solid ${C.rule}`, padding: "14px 18px" }}>
+                  <div style={{ fontSize: 8, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 3, color: C.ink3, marginBottom: 8 }}>BLACK SWAN SCENARIO</div>
+                  <p style={{ margin: 0, fontSize: 13, color: C.ink2, fontStyle: "italic", lineHeight: 1.8 }}>{agentData.risk.black_swan}</p>
+                </div>
+              </div>
+            )}
+
+
+            {/* ── VETERAN ── */}
+            {activeTab === "veteran" && agentData.veteran && (
+              <div>
+
+                {/* Header verdict */}
+                <div style={{
+                  background: agentData.veteran.overall_verdict === "APPROVED" ? "#f0f7f0" : agentData.veteran.overall_verdict === "CHALLENGED" ? "#fdf2f2" : "#fdf8f0",
+                  border: `1px solid ${agentData.veteran.overall_verdict === "APPROVED" ? C.bull : agentData.veteran.overall_verdict === "CHALLENGED" ? C.bear : C.neutral}`,
+                  padding: "16px 18px", marginBottom: 14
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 700, color: C.ink }}>⚑  THE VETERAN — 25 YRS EXPERIENCE</span>
+                    <Stamp text={agentData.veteran.overall_verdict}
+                      color={agentData.veteran.overall_verdict === "APPROVED" ? C.bull : agentData.veteran.overall_verdict === "CHALLENGED" ? C.bear : C.neutral} />
+                  </div>
+                  <p style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 700, fontStyle: "italic", color: C.ink, lineHeight: 1.5 }}>"{agentData.veteran.verdict_stamp}"</p>
+                  <p style={{ margin: 0, fontSize: 12, color: C.ink2, lineHeight: 1.75 }}>{agentData.veteran.final_verdict}</p>
+                </div>
+
+                {/* Overrides */}
+                {agentData.veteran.overrides?.length > 0 && (
+                  <div style={{ background: C.paper, border: `1px solid ${C.rule}`, marginBottom: 12 }}>
+                    <div style={{ padding: "7px 14px", borderBottom: `1px solid ${C.rule}`, background: "#fdf2f2" }}>
+                      <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 3, color: C.bear }}>⚑  OVERRIDES — VETERAN DISAGREES</span>
+                    </div>
+                    {agentData.veteran.overrides.map((o, i) => (
+                      <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 12, padding: "10px 14px", borderBottom: i < agentData.veteran.overrides.length - 1 ? `1px solid ${C.rule2}` : "none", borderLeft: `3px solid ${C.bear}` }}>
+                        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 700, color: C.ink, minWidth: 70 }}>{o.ticker}</span>
+                        <div style={{ display: "flex", gap: 6, alignItems: "center", minWidth: 120 }}>
+                          <Stamp text={o.original_action} color={actC(o.original_action)} />
+                          <span style={{ fontSize: 10, color: C.ink3 }}>→</span>
+                          <Stamp text={o.revised_action} color={actC(o.revised_action)} />
+                        </div>
+                        <span style={{ fontSize: 11, color: C.ink2, flex: 1, lineHeight: 1.6 }}>{o.reason}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Missed picks */}
+                {agentData.veteran.missed_picks?.length > 0 && (
+                  <div style={{ background: C.paper, border: `1px solid ${C.rule}`, marginBottom: 12 }}>
+                    <div style={{ padding: "7px 14px", borderBottom: `1px solid ${C.rule}` }}>
+                      <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 3, color: C.neutral }}>◈  MISSED BY ALL AGENTS</span>
+                    </div>
+                    {agentData.veteran.missed_picks.map((m, i) => (
+                      <div key={i} style={{ padding: "10px 14px", borderBottom: i < agentData.veteran.missed_picks.length - 1 ? `1px solid ${C.rule2}` : "none", borderLeft: `3px solid ${C.neutral}` }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 700, color: C.ink }}>{m.ticker}</span>
+                          <span style={{ fontSize: 11, color: C.ink3 }}>{m.company}</span>
+                          <Stamp text={m.action} color={actC(m.action)} />
+                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: C.ink3, marginLeft: "auto" }}>{m.conviction}/10</span>
+                        </div>
+                        <p style={{ margin: 0, fontSize: 11, color: C.ink2, lineHeight: 1.6 }}>{m.reason}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Conviction adjustments */}
+                {agentData.veteran.conviction_adjustments?.length > 0 && (
+                  <div style={{ background: C.paper, border: `1px solid ${C.rule}`, marginBottom: 12 }}>
+                    <div style={{ padding: "7px 14px", borderBottom: `1px solid ${C.rule}` }}>
+                      <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 3, color: C.ink3 }}>CONVICTION ADJUSTMENTS</span>
+                    </div>
+                    {agentData.veteran.conviction_adjustments.map((a, i) => (
+                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderBottom: i < agentData.veteran.conviction_adjustments.length - 1 ? `1px solid ${C.rule2}` : "none" }}>
+                        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 700, color: C.ink, minWidth: 70 }}>{a.ticker}</span>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: C.ink3 }}>{a.original}/10</span>
+                          <span style={{ fontSize: 10, color: a.direction === "UP" ? C.bull : C.bear }}>{a.direction === "UP" ? "▲" : "▼"}</span>
+                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, fontWeight: 700, color: a.direction === "UP" ? C.bull : C.bear }}>{a.revised}/10</span>
+                        </div>
+                        <span style={{ fontSize: 11, color: C.ink2, flex: 1 }}>{a.reason}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Timing + Contrarian + Sector disagreement */}
+                {[
+                  { label: "TIMING CORRECTION", value: agentData.veteran.timing_correction, color: C.ink3 },
+                  { label: "CONTRARIAN CALL", value: agentData.veteran.contrarian_call, color: C.neutral },
+                  { label: "SECTOR DISAGREEMENT", value: agentData.veteran.sector_disagreement, color: C.bear },
+                ].map(item => item.value && (
+                  <div key={item.label} style={{ background: C.paper, border: `1px solid ${C.rule}`, padding: "12px 16px", marginBottom: 10, borderLeft: `3px solid ${item.color}` }}>
+                    <div style={{ fontSize: 8, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 2.5, color: item.color, marginBottom: 6 }}>{item.label}</div>
+                    <p style={{ margin: 0, fontSize: 12, color: C.ink2, lineHeight: 1.7, fontStyle: "italic" }}>{item.value}</p>
+                  </div>
+                ))}
+
+              </div>
+            )}
+
+                        {/* ── TECHNICAL ── */}
+            {activeTab === "technical" && (
+              <div>
+                {agentData.technical?.raw?.some(t => !t.error) && (
+                  <div style={{ background: C.paper, border: `1px solid ${C.rule}`, marginBottom: 14 }}>
+                    <div style={{ padding: "7px 14px", borderBottom: `1px solid ${C.rule}` }}>
+                      <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 3, color: C.ink3 }}>LIVE PRICE DATA — YAHOO FINANCE</span>
+                    </div>
+                    <div style={{ overflowX: "auto" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, fontFamily: "'IBM Plex Mono', monospace" }}>
+                        <thead>
+                          <tr style={{ borderBottom: `1px solid ${C.rule}` }}>
+                            {["TICKER","PRICE","1D%","52W LOW","52W HIGH","RANGE POS","MA50","MA200","TREND","VOL RATIO"].map(h => (
+                              <th key={h} style={{ padding: "6px 10px", fontSize: 8, letterSpacing: 1.5, color: C.ink4, fontWeight: 700, textAlign: "left" }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {agentData.technical.raw.map((t, i) => {
+                            const ts = agentData.technical?.stocks?.find(s => s.ticker === t.ticker);
+                            const trend = ts?.trend || (t.aboveMa50 && t.goldenCross ? "UPTREND" : !t.aboveMa50 && !t.goldenCross ? "DOWNTREND" : "MIXED");
+                            return (
+                              <tr key={i} style={{ borderBottom: `1px solid ${C.rule2}` }}>
+                                <td style={{ padding: "8px 10px", fontWeight: 700, color: C.ink }}>{t.ticker}</td>
+                                <td style={{ padding: "8px 10px", color: C.ink }}>₹{t.price || "—"}</td>
+                                <td style={{ padding: "8px 10px", color: t.change1d > 0 ? C.bull : t.change1d < 0 ? C.bear : C.ink3 }}>{t.change1d != null ? (t.change1d > 0 ? "+" : "") + t.change1d + "%" : "—"}</td>
+                                <td style={{ padding: "8px 10px", color: C.ink3 }}>₹{t.low52 || "—"}</td>
+                                <td style={{ padding: "8px 10px", color: C.ink3 }}>₹{t.high52 || "—"}</td>
+                                <td style={{ padding: "8px 10px" }}>
+                                  {t.rangePos != null ? (
+                                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                      <div style={{ width: 50, height: 4, background: C.rule2, borderRadius: 2, position: "relative" }}>
+                                        <div style={{ position: "absolute", left: 0, width: t.rangePos + "%", height: 4, background: t.rangePos > 70 ? C.bull : t.rangePos < 30 ? C.bear : C.neutral, borderRadius: 2 }} />
+                                      </div>
+                                      <span style={{ fontSize: 9, color: C.ink3 }}>{t.rangePos}%</span>
+                                    </div>
+                                  ) : "—"}
+                                </td>
+                                <td style={{ padding: "8px 10px", color: t.aboveMa50 ? C.bull : C.bear }}>₹{t.ma50 || "—"} {t.aboveMa50 != null ? (t.aboveMa50 ? "▲" : "▼") : ""}</td>
+                                <td style={{ padding: "8px 10px", color: t.aboveMa200 ? C.bull : C.bear }}>₹{t.ma200 || "—"} {t.aboveMa200 != null ? (t.aboveMa200 ? "▲" : "▼") : ""}</td>
+                                <td style={{ padding: "8px 10px" }}><Stamp text={trend} color={trend === "UPTREND" ? C.bull : trend === "DOWNTREND" ? C.bear : C.neutral} /></td>
+                                <td style={{ padding: "8px 10px", color: t.volRatio > 1.5 ? C.bull : t.volRatio < 0.7 ? C.bear : C.ink3 }}>{t.volRatio != null ? t.volRatio + "x" : "—"}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {agentData.technical?.stocks?.map((t, i) => (
+                  <div key={i} style={{ background: C.paper, border: `1px solid ${C.rule}`, borderLeft: `4px solid ${t.technical_signal === "BULLISH" ? C.bull : t.technical_signal === "BEARISH" ? C.bear : C.neutral}`, marginBottom: 10, padding: "12px 16px" }}>
+                    <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
+                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 700, color: C.ink }}>{t.ticker}</span>
+                      <Stamp text={t.technical_signal} color={t.technical_signal === "BULLISH" ? C.bull : t.technical_signal === "BEARISH" ? C.bear : C.neutral} />
+                      <Stamp text={t.trend} color={t.trend === "UPTREND" ? C.bull : t.trend === "DOWNTREND" ? C.bear : C.neutral} />
+                      <Stamp text={"MOMENTUM: " + t.momentum} />
+                      <span style={{ marginLeft: "auto", fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: C.ink3 }}>Tech score: {t.technical_score}/10</span>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", border: `1px solid ${C.rule2}`, marginBottom: 8 }}>
+                      {[
+                        { label: "SUPPORT", value: t.key_support ? "₹" + t.key_support : "—", color: C.bull },
+                        { label: "RESISTANCE", value: t.key_resistance ? "₹" + t.key_resistance : "—", color: C.bear },
+                        { label: "BEAR TARGET", value: t.bear_pct != null ? (t.bear_pct > 0 ? "+" : "") + t.bear_pct + "%" : "—", color: C.bear },
+                        { label: "BULL TARGET", value: t.bull_pct != null ? "+" + t.bull_pct + "%" : "—", color: C.bull },
+                      ].map((cell, ci) => (
+                        <div key={ci} style={{ padding: "8px 10px", borderRight: ci < 3 ? `1px solid ${C.rule2}` : "none", textAlign: "center" }}>
+                          <div style={{ fontSize: 7, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 1.5, color: C.ink4, marginBottom: 3 }}>{cell.label}</div>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: cell.color, fontFamily: "'IBM Plex Mono', monospace" }}>{cell.value}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {t.range_comment && <p style={{ margin: "0 0 3px", fontSize: 11, color: C.ink3 }}>{t.range_comment}</p>}
+                    {t.volume_comment && <p style={{ margin: "0 0 3px", fontSize: 11, color: C.ink3 }}>{t.volume_comment}</p>}
+                    {t.technical_note && <p style={{ margin: "4px 0 0", fontSize: 11, color: C.ink2, fontStyle: "italic" }}>"{t.technical_note}"</p>}
+                  </div>
+                ))}
+
+                {agentData.technical?.technical_summary && (
+                  <div style={{ background: C.paper, border: `1px solid ${C.rule}`, padding: "12px 16px", borderLeft: `3px solid ${C.ink2}` }}>
+                    <div style={{ fontSize: 8, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 3, color: C.ink3, marginBottom: 6 }}>OVERALL TECHNICAL PICTURE</div>
+                    <p style={{ margin: 0, fontSize: 13, color: C.ink2, lineHeight: 1.7 }}>{agentData.technical.technical_summary}</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── AGENTS RAW ── */}
+            {activeTab === "raw" && (
+              <div>
+                {AGENTS.map(a => agentData[a.id] && (
+                  <div key={a.id} style={{ border: `1px solid ${C.rule}`, marginBottom: 8, background: C.paper }}>
+                    <button onClick={() => setExpandedAgent(expandedAgent === a.id ? null : a.id)} style={{
+                      width: "100%", padding: "10px 14px", background: "transparent",
+                      border: "none", display: "flex", alignItems: "center", gap: 10, cursor: "pointer",
+                    }}>
+                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, fontWeight: 700, color: C.ink, letterSpacing: 1 }}>{a.label.toUpperCase()}</span>
+                      <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", color: C.ink3 }}>{a.desc}</span>
+                      <span style={{ marginLeft: "auto", fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", color: C.ink4 }}>{agentDuration[a.id]}s  {expandedAgent === a.id ? "▲" : "▼"}</span>
+                    </button>
+                    {expandedAgent === a.id && (
+                      <pre style={{ margin: 0, padding: 14, fontSize: 9, color: C.ink3, lineHeight: 1.6, overflowX: "auto", background: C.bg, maxHeight: 280, overflowY: "auto", borderTop: `1px solid ${C.rule2}`, fontFamily: "'IBM Plex Mono', monospace" }}>
+                        {JSON.stringify(agentData[a.id], null, 2)}
+                      </pre>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <p style={{ fontSize: 9, color: C.ink4, textAlign: "center", marginTop: 28, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 1 }}>
+              NOT FINANCIAL ADVICE  ·  FOR EDUCATIONAL PURPOSES ONLY  ·  DO YOUR OWN RESEARCH
+            </p>
+          </div>
+        )}
+
+        {/* Empty state */}
+        {!result && !running && Object.keys(agentStatus).length === 0 && (
+          <div style={{ textAlign: "center", padding: "60px 20px" }}>
+            <div style={{ fontSize: 32, marginBottom: 12, color: C.rule, fontFamily: "'Playfair Display', serif" }}>◎</div>
+            <p style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 3, color: C.ink4, margin: 0 }}>AWAITING EVENT INPUT</p>
+            <p style={{ fontSize: 10, color: C.rule, margin: "8px 0 0", fontFamily: "'IBM Plex Mono', monospace" }}>9 agents ready · India-focused</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
